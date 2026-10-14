@@ -1,0 +1,122 @@
+name: Release
+
+# audiocpp_server (fish_drama3) for koharu-runtime; bump RELEASE_TAG with
+# `RELEASE` in koharu-runtime's audiocpp.rs.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AUDIOCPP_REPOSITORY: JarodMica/audio.cpp
+  AUDIOCPP_REF: 9277495adfdc9b41004bd91db7b7a4e5d456c8df
+  RELEASE_TAG: drama3-9277495
+  # Turing through Blackwell, plus PTX for newer GPUs.
+  CUDA_ARCHITECTURES: 75-real;80-real;86-real;89-real;90-real;120-real;120-virtual
+
+jobs:
+  build:
+    name: cuda / ${{ matrix.target }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: build/windows-cuda-release/bin/audiocpp_server.exe
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            binary: build/linux-cuda-release/bin/audiocpp_server
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Check out audio.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.AUDIOCPP_REPOSITORY }}
+          ref: ${{ env.AUDIOCPP_REF }}
+          submodules: recursive
+          path: audio.cpp
+
+      # Koharu supplies CUDA 13 libraries from NVIDIA wheels; the archive bundles none.
+      - name: Install CUDA 13.3
+        uses: Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d # v0.2.36
+        with:
+          cuda: '13.3.1'
+          method: network
+          log-file-suffix: ${{ matrix.target }}
+          sub-packages: >-
+            ${{ runner.os == 'Linux'
+              && '["nvcc", "cudart", "crt", "thrust"]'
+              || '["nvcc", "cudart", "crt", "thrust", "nvvm", "cublas", "cublas_dev", "cufft", "cufft_dev"]' }}
+          non-cuda-sub-packages: >-
+            ${{ runner.os == 'Linux' && '["libcublas", "libcublas-dev", "libcufft", "libcufft-dev"]' || '[]' }}
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        working-directory: audio.cpp
+        shell: pwsh
+        run: >
+          ./scripts/build_windows.ps1
+          -Preset windows-cuda-release
+          -ModelSet custom -Models fish_drama3
+          -Target audiocpp_server
+          -DeploymentBuild
+          -CudaArchitectures "$env:CUDA_ARCHITECTURES"
+
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        working-directory: audio.cpp
+        run: >
+          scripts/build_linux.sh
+          --backend cuda
+          --cuda-arch "$CUDA_ARCHITECTURES"
+          --deployment-build
+          --model-set custom --models fish_drama3
+          --target audiocpp_server
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary='audio.cpp/${{ matrix.binary }}'
+          if [ "$RUNNER_OS" = Linux ]; then
+            readelf -d "$binary" | grep NEEDED
+          else
+            objdump -p "$binary" | grep 'DLL Name'
+          fi
+          stage=$(mktemp -d)
+          cp "$binary" "$stage/"
+          cp audio.cpp/LICENSE "$stage/LICENSE"
+          cp audio.cpp/external/ggml/LICENSE "$stage/LICENSE-ggml"
+          tar -C "$stage" -czf '${{ matrix.target }}-cuda.tar.gz' .
+          tar -tzf '${{ matrix.target }}-cuda.tar.gz'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}-cuda
+          path: ${{ matrix.target }}-cuda.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Drama 3 speech server ${{ env.RELEASE_TAG }}
+          body: |
+            `audiocpp_server` (`fish_drama3`) from
+            ${{ env.AUDIOCPP_REPOSITORY }}@${{ env.AUDIOCPP_REF }}, CUDA 13.3,
+            architectures ${{ env.CUDA_ARCHITECTURES }}. CUDA libraries not included.
+          files: artifacts/*.tar.gz
