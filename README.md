@@ -13,13 +13,6 @@ Archives hold the executable and licenses at the root. CUDA 13 libraries are
 not bundled; Koharu installs them from NVIDIA wheels and puts them on the
 server's library path.
 
-## Release
-
-1. Push this repository as `karrot0/audio.cpp`.
-2. Run the **Release** workflow; it publishes `RELEASE_TAG`.
-3. Keep `AUDIOCPP_REF`/`RELEASE_TAG` here and `RELEASE`/`REPOSITORY` in
-   `crates/koharu-runtime/src/runtime/packages/audiocpp.rs` in sync.
-
 ## Licenses
 
 audio.cpp: Apache-2.0. ggml: MIT. Both ship in every archive. Drama 3 weights
